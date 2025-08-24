@@ -6,14 +6,24 @@ import sys
 import time
 import math
 import os
+import random
+import tkinter as tk
+from tkinter import filedialog
 
+# -------------------------------
+# Configuration (essential parameters)
+# -------------------------------
 class Config:
-    frame_size = 1024
-    hop_size = 512
-    threshold_k = 1.5
-    refractory_ms = 200
+    frame_size = 512        # audio frame size for FFT
+    hop_size = 128          # step between frames
+    threshold_k = 1.3       # beat detection sensitivity
+    refractory_ms = 100     # minimum time between beats (ms)
     sample_rate = 44100
+    bass_cutoff = 150       # only bass frequencies considered
 
+# -------------------------------
+# Beat detection (spectral energy in bass)
+# -------------------------------
 class BeatDetector:
     def __init__(self, config: Config):
         self.cfg = config
@@ -22,109 +32,108 @@ class BeatDetector:
         self.last_beat_time = 0
 
     def detect(self, frame, t_ms):
-        energy = np.sum(frame ** 2)
+        # FFT and bass energy
+        spectrum = np.abs(np.fft.rfft(frame * np.hanning(len(frame))))
+        freqs = np.fft.rfftfreq(len(frame), 1/self.cfg.sample_rate)
+        bass = spectrum[freqs <= self.cfg.bass_cutoff]
+        energy = np.sum(bass**2)
+
+        # maintain energy history
         self.energy_history.append(energy)
         if len(self.energy_history) > self.max_history:
             self.energy_history.pop(0)
         if len(self.energy_history) < self.max_history:
             return False
+
+        # adaptive threshold
         avg_energy = np.mean(self.energy_history)
         threshold = (-0.0025714 * len(self.energy_history) + 1.5142857) * avg_energy
+
+        # beat occurs if energy > threshold & outside refractory period
         if energy > threshold * self.cfg.threshold_k:
             if t_ms - self.last_beat_time > self.cfg.refractory_ms:
                 self.last_beat_time = t_ms
                 return True
         return False
 
+# -------------------------------
+# Visualizer (main graphics + audio)
+# -------------------------------
 def run_visualizer(audio_file):
+    # Load audio
     data, samplerate = sf.read(audio_file)
     if data.ndim > 1:
-        data = np.mean(data, axis=1)
+        data = np.mean(data, axis=1)  # stereo → mono
     Config.sample_rate = samplerate
-    detector = BeatDetector(Config)
+    detector = BeatDetector(Config())
 
+    # Pygame setup
     pygame.init()
     width, height = 1000, 700
+    center_x, center_y = width//2, height//2
     screen = pygame.display.set_mode((width, height))
     clock = pygame.time.Clock()
-    font = pygame.font.SysFont("Arial", 24)
 
-    neon_colors = [(0,255,255),(0,255,100),(255,0,255),(255,255,0),(255,120,0)]
-    
-    NUM_BARS = 50
-    MAX_SPECTRUM = 120
-    caps = [0.0]*NUM_BARS
-    cap_fall_speed = 0.1
-    sd.play(data, samplerate)
-    start_time = time.time()
+    neon_colors = [(0,255,0), (0,255,255), (255,0,255), (255,255,0)]
+
+    NUM_BARS = 200
+    MAX_SPECTRUM = 150
     beat_pulse = 0.0
-    frame_idx = 0
-    rotation_angle = 0.0  # rotation of circular bars
+    rotation_angle = 0.0
 
-    audio_name = os.path.basename(audio_file)
+    # Start audio
+    sd.play(data, samplerate)
+    frame_start = 0
+    start_time = time.time()
 
-    running = True
-    while running:
+    font_center = pygame.font.SysFont("Arial", 32)
+
+    while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running = False
+                sd.stop()
+                pygame.quit()
+                sys.exit(0)
+
+        frame_end = frame_start + Config.frame_size
+        if frame_end >= len(data):
+            break
+        frame = data[frame_start:frame_end]
+        frame_start += Config.hop_size
 
         now = time.time() - start_time
         t_ms = int(now*1000)
-        start = frame_idx*Config.hop_size
-        end = start+Config.frame_size
-        if end >= len(data):
-            break
-        frame = data[start:end]
-        frame_idx += 1
 
-        # Detect beat
+        # Beat detection
         beat_occurred = detector.detect(frame, t_ms)
-        if beat_occurred:
-            beat_pulse = 1.0
-        else:
-            beat_pulse *= 0.85  # smooth decay
+        beat_pulse = 1.0 if beat_occurred else beat_pulse * 0.85
 
-        spectrum = np.abs(np.fft.rfft(frame*np.hanning(len(frame))))[:MAX_SPECTRUM]
-        bars = spectrum[np.linspace(0,len(spectrum)-1,NUM_BARS).astype(int)]
+        # FFT for spectrum bars
+        spectrum = np.abs(np.fft.rfft(frame * np.hanning(len(frame))))[:MAX_SPECTRUM]
+        bars = spectrum[np.linspace(0, len(spectrum)-1, NUM_BARS).astype(int)]
         bars /= np.max(bars)+1e-9
 
-        screen.fill((5,5,10))  # dark background
-        center_x, center_y = width//2, height//2
+        screen.fill((5,5,10))  # background
 
-        # --- pulsing circle reacts to beat intensity ---
-        pulse_radius = int(80 + 120 * beat_pulse)
-        pulse_surf = pygame.Surface((pulse_radius*2, pulse_radius*2), pygame.SRCALPHA)
-        pygame.draw.circle(pulse_surf, (0,255,255,100), (pulse_radius,pulse_radius), pulse_radius, 6)
-        screen.blit(pulse_surf, (center_x-pulse_radius, center_y-pulse_radius))
+        # Pulsing central circle with time
+        circle_radius = int(100 + 60*beat_pulse)
+        pygame.draw.circle(screen, (0,255,0), (center_x, center_y), circle_radius, 6)
+        minutes, seconds = divmod(int(now), 60)
+        time_text = font_center.render(f"{minutes:02d}:{seconds:02d}", True, (0,255,0))
+        screen.blit(time_text, time_text.get_rect(center=(center_x, center_y)))
 
-        # --- circular bars: move faster with strong beat ---
-        radius = 180
-        rotation_angle += 0.5 + 3*beat_pulse  # faster rotation when beat is strong
+        # Circular spectrum bars
+        rotation_angle += (0.03 + 0.15*beat_pulse)/2
+        radius_base = 200
         for i, val in enumerate(bars):
-            if beat_pulse > 0.05:
-                bar_len = int(val*150*beat_pulse)
-            else:
-                bar_len = 0
-            angle_bar = i * (360/NUM_BARS) + rotation_angle
+            angle_bar = i * (360/NUM_BARS) + math.degrees(rotation_angle)
             rad = math.radians(angle_bar)
-            x_start = center_x + int(radius*math.cos(rad))
-            y_start = center_y + int(radius*math.sin(rad))
-            x_end = center_x + int((radius+bar_len)*math.cos(rad))
-            y_end = center_y + int((radius+bar_len)*math.sin(rad))
-            color = neon_colors[i % len(neon_colors)]
-            pygame.draw.line(screen, color, (x_start,y_start), (x_end,y_end), 6)
-
-        # --- display timestamp ---
-        elapsed_sec = int(now)
-        minutes = elapsed_sec // 60
-        seconds = elapsed_sec % 60
-        timestamp = font.render(f"{minutes:02d}:{seconds:02d}", True, (255,255,255))
-        screen.blit(timestamp, (width-100, 20))
-
-        # --- display audio name ---
-        name_text = font.render(f"Playing: {audio_name}", True, (0,255,255))
-        screen.blit(name_text, (20, 20))
+            bar_len = int(val*150*beat_pulse)
+            x_start = center_x + int(radius_base*math.cos(rad))
+            y_start = center_y + int(radius_base*math.sin(rad))
+            x_end = center_x + int((radius_base+bar_len)*math.cos(rad))
+            y_end = center_y + int((radius_base+bar_len)*math.sin(rad))
+            pygame.draw.line(screen, neon_colors[i % len(neon_colors)], (x_start,y_start), (x_end,y_end), 4)
 
         pygame.display.flip()
         clock.tick(60)
@@ -132,8 +141,20 @@ def run_visualizer(audio_file):
     sd.stop()
     pygame.quit()
 
+# -------------------------------
+# Main: CLI or file dialog
+# -------------------------------
 if __name__=="__main__":
-    if len(sys.argv)<2:
-        print("Usage: python beat_visualizer.py yourfile.wav")
-        sys.exit(1)
-    run_visualizer(sys.argv[1])
+    audio_file = None
+
+    if len(sys.argv) >= 2:  # command line
+        audio_file = sys.argv[1]
+    else:  # file dialog
+        root = tk.Tk()
+        root.withdraw()
+        audio_file = filedialog.askopenfilename(title="Select audio file", filetypes=[("WAV files", "*.wav")])
+        if not audio_file:
+            print("No file selected. Exiting.")
+            sys.exit(1)
+
+    run_visualizer(audio_file)
