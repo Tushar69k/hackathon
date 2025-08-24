@@ -6,9 +6,7 @@ import sys
 import time
 import math
 
-# -------------------------------
 # Config
-# -------------------------------
 class Config:
     frame_size = 1024
     hop_size = 512
@@ -16,9 +14,7 @@ class Config:
     refractory_ms = 200
     sample_rate = 44100
 
-# -------------------------------
 # Beat Detector
-# -------------------------------
 class BeatDetector:
     def __init__(self, config: Config):
         self.cfg = config
@@ -45,9 +41,7 @@ class BeatDetector:
                 return True
         return False
 
-# -------------------------------
 # Neon Visualizer
-# -------------------------------
 def run_visualizer(audio_file):
     data, samplerate = sf.read(audio_file)
     if len(data.shape) > 1:  # stereo → mono
@@ -105,22 +99,20 @@ def run_visualizer(audio_file):
         spectrum = np.abs(np.fft.rfft(frame * np.hanning(len(frame))))
         spectrum = spectrum[:100]
 
-        # ---- Background ----
+        # Background
         bg_r = int(50 + 100 * abs(math.sin(time.time() * 0.5)))
         bg_g = int(50 + 100 * abs(math.sin(time.time() * 0.7)))
         bg_b = int(50 + 100 * abs(math.sin(time.time() * 0.9)))
         screen.fill((bg_r, bg_g, bg_b))
 
-        # ---- Spectrum Bars ----
         bar_w = width // len(spectrum)
         for idx, val in enumerate(spectrum):
             h = int((val / (np.max(spectrum) + 1e-6)) * (height // 2))
             r = pygame.Rect(idx * bar_w, height - h, bar_w, h)
-            color = neon_colors[idx % len(neon_colors)]
+            color = neon_colors[idx % len(neon_colors)] # will use later
             pygame.draw.rect(screen, (10, 10, 10), r)  # dark base
-            pygame.draw.rect(screen, color, r.inflate(-2, 0))  # neon bar
+            pygame.draw.rect(screen, color, r.inflate(-2, 0)) # neon bar
 
-        # ---- Neon Pulse Circle ----
         cx, cy = width // 2, height // 2
         radius = int(80 + 60 * beat_pulse)
         color = neon_colors[int(time.time() * 2) % len(neon_colors)]
@@ -139,9 +131,7 @@ def run_visualizer(audio_file):
     sd.stop()
     pygame.quit()
 
-# -------------------------------
-# Main
-# -------------------------------
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python beat_visualizer.py yourfile.wav")
