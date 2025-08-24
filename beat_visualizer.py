@@ -10,6 +10,7 @@ import random
 import tkinter as tk
 from tkinter import filedialog
 
+# Config
 # -------------------------------
 # Configuration (essential parameters)
 # -------------------------------
@@ -21,6 +22,7 @@ class Config:
     sample_rate = 44100
     bass_cutoff = 150       # only bass frequencies considered
 
+# Beat Detector
 # -------------------------------
 # Beat detection (spectral energy in bass)
 # -------------------------------
@@ -56,6 +58,7 @@ class BeatDetector:
                 return True
         return False
 
+# Neon Visualizer
 # -------------------------------
 # Visualizer (main graphics + audio)
 # -------------------------------
@@ -108,6 +111,15 @@ def run_visualizer(audio_file):
         beat_occurred = detector.detect(frame, t_ms)
         beat_pulse = 1.0 if beat_occurred else beat_pulse * 0.85
 
+        # FFT spectrum
+        spectrum = np.abs(np.fft.rfft(frame * np.hanning(len(frame))))
+        spectrum = spectrum[:100]
+
+        # Background
+        bg_r = int(50 + 100 * abs(math.sin(time.time() * 0.5)))
+        bg_g = int(50 + 100 * abs(math.sin(time.time() * 0.7)))
+        bg_b = int(50 + 100 * abs(math.sin(time.time() * 0.9)))
+        screen.fill((bg_r, bg_g, bg_b))
         # FFT for spectrum bars
         spectrum = np.abs(np.fft.rfft(frame * np.hanning(len(frame))))[:MAX_SPECTRUM]
         bars = spectrum[np.linspace(0, len(spectrum)-1, NUM_BARS).astype(int)]
@@ -122,6 +134,25 @@ def run_visualizer(audio_file):
         time_text = font_center.render(f"{minutes:02d}:{seconds:02d}", True, (0,255,0))
         screen.blit(time_text, time_text.get_rect(center=(center_x, center_y)))
 
+        bar_w = width // len(spectrum)
+        for idx, val in enumerate(spectrum):
+            h = int((val / (np.max(spectrum) + 1e-6)) * (height // 2))
+            r = pygame.Rect(idx * bar_w, height - h, bar_w, h)
+            color = neon_colors[idx % len(neon_colors)] # will use later
+            pygame.draw.rect(screen, (10, 10, 10), r)  # dark base
+            pygame.draw.rect(screen, color, r.inflate(-2, 0)) # neon bar
+
+        cx, cy = width // 2, height // 2
+        radius = int(80 + 60 * beat_pulse)
+        color = neon_colors[int(time.time() * 2) % len(neon_colors)]
+        for glow in range(6, 0, -1):
+            pygame.draw.circle(
+                screen,
+                color,
+                (cx, cy),
+                radius + glow * 4,
+                width=2
+            )
         # Circular spectrum bars
         rotation_angle += (0.03 + 0.15*beat_pulse)/2
         radius_base = 200
@@ -141,6 +172,12 @@ def run_visualizer(audio_file):
     sd.stop()
     pygame.quit()
 
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python beat_visualizer.py yourfile.wav")
+        sys.exit(1)
+    run_visualizer(sys.argv[1])
 # -------------------------------
 # Main: CLI or file dialog
 # -------------------------------
